@@ -11,14 +11,18 @@ RUN npm ci
 
 COPY resources ./resources
 COPY public ./public
-COPY vite.config.js ./
+COPY vite.config.js postcss.config.js tailwind.config.js ./
 
 RUN npm run build
 
-# Verify that Vite generated the manifest
+# Verify that Vite generated the manifest and a non-trivial CSS bundle
 RUN test -f public/build/manifest.json \
     && echo "Frontend build completed successfully" \
-    && ls -la public/build
+    && ls -la public/build/assets \
+    && css_file="$(ls public/build/assets/*.css | head -n 1)" \
+    && css_size="$(wc -c < "$css_file")" \
+    && echo "CSS bundle: $css_file ($css_size bytes)" \
+    && test "$css_size" -gt 10000
 
 
 # --------------------------------------------------
@@ -61,11 +65,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN a2enmod rewrite \
-    && sed -ri \
-        -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' \
-        -e 's!AllowOverride None!AllowOverride All!g' \
-        /etc/apache2/sites-available/*.conf \
+RUN a2enmod rewrite headers \
+    && printf 'ServerName localhost\n' > /etc/apache2/conf-available/servername.conf \
+    && a2enconf servername
+
+# Pin DocumentRoot to Laravel's public/ (avoid ${APACHE_DOCUMENT_ROOT} expansion issues)
+COPY docker/000-default.conf /etc/apache2/sites-available/000-default.conf
+
+RUN sed -ri -e 's!AllowOverride None!AllowOverride All!g' \
         /etc/apache2/apache2.conf \
         /etc/apache2/conf-available/*.conf
 
@@ -83,28 +90,28 @@ RUN composer install \
     --optimize-autoloader \
     --no-scripts
 
-# Copy Laravel application
+# Copy Laravel source
 COPY . .
 
-# Copy compiled frontend assets
+# Remove any stale local Vite build
+RUN rm -rf /var/www/html/public/build
+
+# Copy one complete Vite build from the frontend stage
 COPY --from=frontend /app/public/build /var/www/html/public/build
 
-# Verify final manifest location
+# Verify manifest and matching asset files
 RUN test -f /var/www/html/public/build/manifest.json \
-    && echo "Vite manifest successfully copied" \
-    && ls -la /var/www/html/public/build
+    && echo "Vite files in final image:" \
+    && find /var/www/html/public/build -maxdepth 2 -type f -print
 
-RUN mkdir -p \
+# Rebuild autoloader after full source copy (install used --no-scripts)
+RUN composer dump-autoload --optimize --no-scripts \
+    && mkdir -p \
+        storage/logs \
         storage/framework/cache/data \
         storage/framework/sessions \
         storage/framework/views \
-        storage/logs \
         bootstrap/cache \
-    && composer dump-autoload \
-        --no-dev \
-        --optimize \
-        --no-interaction \
-        --no-scripts \
     && chown -R www-data:www-data storage bootstrap/cache \
     && chmod -R 775 storage bootstrap/cache \
     && chmod +x docker/start.sh
