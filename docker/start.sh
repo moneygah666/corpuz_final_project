@@ -15,8 +15,5 @@ php artisan optimize || true
 # Do not start Reverb here — run docker/start-reverb.sh as a separate
 # Render web service (see render.yaml). Background workers are not reachable
 # from the browser for WebSockets.
-echo "APACHE_RUN_USER: $(grep APACHE_RUN_USER /etc/apache2/envvars)"
-echo "APACHE_RUN_GROUP: $(grep APACHE_RUN_GROUP /etc/apache2/envvars)"
-ls -la /var/www/html/storage/logs
 
 exec apache2-foreground
